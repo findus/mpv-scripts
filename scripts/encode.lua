@@ -134,6 +134,24 @@ function seconds_to_time_string(seconds, full)
     return ret
 end
 
+function get_youtube_urls()
+    local path = mp.get_property("stream-path")
+    local url1,url2 = string.match(path, "(https://.*);!new.*(https://.*)")
+    return url1, url2
+end
+
+function is_youtube()
+    local path = mp.get_property("path")
+    print(path)
+    if string.match(path, "https://www.youtube.com") then
+        print("Is Youtube video")
+        return true
+    else
+        print("Is not Youtube video")
+        return false
+    end
+end
+
 function start_encoding(from, to, settings)
     local args = {
         settings.ffmpeg_command,
@@ -143,27 +161,46 @@ function start_encoding(from, to, settings)
 
     local path = mp.get_property("path")
     local is_stream = not file_exists(path)
+
     if is_stream then
         path = mp.get_property("stream-path")
+    end
+
+    local is_youtube = is_youtube()
+    if is_youtube then
+        path, path2 = get_youtube_urls()
     end
 
     local track_args = {}
     local start = seconds_to_time_string(from, false)
     local input_index = 0
-    for input_path, tracks in pairs(get_input_info(path, settings.only_active_tracks)) do
-       append_args({
+
+    if is_youtube then
+        append_args({
             "-ss", start,
-            "-i", input_path,
+            "-i", path,
+            "-ss", start,
+            "-i", path2
         })
-        if settings.only_active_tracks then
-            for _, track_index in ipairs(tracks) do
-                track_args = append_table(track_args, { "-map", string.format("%d:%d", input_index, track_index)})
+    else
+
+        for input_path, tracks in pairs(get_input_info(path, settings.only_active_tracks)) do
+        append_args({
+                "-ss", start,
+                "-i", input_path,
+            })
+            if settings.only_active_tracks then
+                for _, track_index in ipairs(tracks) do
+                    -- track_args = append_table(track_args, { "-map", string.format("%d:%d", input_index, track_index)})
+                end
+            else
+                -- track_args = append_table(track_args, { "-map", tostring(input_index)})
             end
-        else
-            track_args = append_table(track_args, { "-map", tostring(input_index)})
+            input_index = input_index + 1
         end
-        input_index = input_index + 1
     end
+
+        -- ffmpeg -ss 00:10 -i "$one" -ss 00:10 -i "$two" -map 0:v -map 1:a -ss 30 -t 0:10 -c:v libx264 -c:a aac gog-vs-triv.mkv
 
     append_args({"-to", tostring(to-from)})
     append_args(track_args)
@@ -179,6 +216,13 @@ function start_encoding(from, to, settings)
     if #filters > 0 then
         append_args({ "-filter:v", table.concat(filters, ",") })
     end
+	
+	 -- attempt to add filter complex
+    local filterc = {}
+    if settings.append_filter_complex ~= "" then
+        filterc = settings.append_filter_complex
+        append_args({ "-filter_complex", filterc })
+	end
 
     -- split the user-passed settings on whitespace
     for token in string.gmatch(settings.codec, "[^%s]+") do
@@ -229,6 +273,11 @@ function start_encoding(from, to, settings)
     else
         local res = utils.subprocess({ args = args, max_size = 0, cancellable = false })
         if res.status == 0 then
+            args = {
+                "notify-send",
+                "Encoding finished"
+            }
+            utils.subprocess( {args = args })
             mp.osd_message("Finished encoding succesfully")
         else
             mp.osd_message("Failed to encode, check the log")
@@ -246,6 +295,8 @@ function clear_timestamp()
 end
 
 function set_timestamp(profile)
+    local is_youtube = is_youtube()
+
     if not mp.get_property("path") then
         mp.osd_message("No file currently playing")
         return
@@ -284,9 +335,10 @@ function set_timestamp(profile)
         ), timer_duration)
         -- include the current frame into the extract
         local fps = mp.get_property_number("container-fps") or 30
-        to = to + 1 / fps / 2
+        to = to + 1 / fps / 2            
+      
         local settings = {
-            detached = true,
+            detached = false,
             container = "",
             only_active_tracks = false,
             preserve_filters = true,
@@ -295,8 +347,14 @@ function set_timestamp(profile)
             output_format = "$f_$n.webm",
             output_directory = "",
             ffmpeg_command = "ffmpeg",
+			append_filter_complex = "",
             print = true,
         }
+
+        if is_youtube then 
+            settings.codec = "-c:v copy -c:a copy"
+        end
+
         if profile then
             options.read_options(settings, profile)
             if settings.container ~= "" then
