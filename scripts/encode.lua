@@ -136,7 +136,7 @@ end
 
 function get_youtube_urls()
     local path = mp.get_property("stream-path")
-    local url1,url2 = string.match(path, "(https://.*);!new.*(https://.*)")
+    local url1,url2 = string.match(path, "(https://.*);!new.*(https://.*);")
     return url1, url2
 end
 
