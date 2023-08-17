@@ -155,9 +155,10 @@ end
 function start_encoding(from, to, settings)
     local args = {
         settings.ffmpeg_command,
-        "-loglevel", "panic", "-hide_banner",
+        "-loglevel", "warning", "-hide_banner",
     }
     local append_args = function(table) args = append_table(args, table) end
+	local append_args2 = function(table) args2 = append_table(args2, table) end
 
     local path = mp.get_property("path")
     local is_stream = not file_exists(path)
@@ -216,8 +217,8 @@ function start_encoding(from, to, settings)
     if #filters > 0 then
         append_args({ "-filter:v", table.concat(filters, ",") })
     end
-	
-	 -- attempt to add filter complex
+  
+   -- attempt to add filter complex
     local filterc = {}
     if settings.append_filter_complex ~= "" then
         filterc = settings.append_filter_complex
@@ -248,39 +249,77 @@ function start_encoding(from, to, settings)
         mp.osd_message("Invalid path " .. output_directory)
         return
     end
-    args[#args + 1] = utils.join_path(output_directory, output_name)
+	
+	if settings.target_file_size then
+		slicelength = to-from
+		test = tostring(math.floor(((settings.target_file_size * 8388.608) / slicelength) - 128)) .. "k"
+		print(test)
+		bitrate = test
+		append_args({ "-b:v", bitrate})
+	end
+	
+	args2 = table.shallow_copy(args)
+	
+	if settings.target_file_size then
+		append_args2({ "-pass", "1", "-an", "-f", "null", "/dev/null"})
+		append_args({ "-pass", "2"})
+	end
+	args[#args + 1] = utils.join_path(output_directory, output_name)
 
-    if settings.print then
-        local o = ""
-        -- fuck this is ugly
-        for i = 1, #args do
-            local fmt = ""
-            if i == 1 then
-                fmt = "%s%s"
-            elseif i >= 2 and i <= 4 then
-                fmt = "%s"
-            elseif args[i-1] == "-i" or i == #args or args[i-1] == "-filter:v" then
-                fmt = "%s '%s'"
-            else
-                fmt = "%s %s"
-            end
-            o = string.format(fmt, o, args[i])
-        end
-        print(o)
-    end
+
+
     if settings.detached then
         utils.subprocess_detached({ args = args })
     else
-        local res = utils.subprocess({ args = args, max_size = 0, cancellable = false })
-        if res.status == 0 then
-            args = {
+	
+		if settings.target_file_size then
+			print("1pass start")
+			local res = utils.subprocess({ args = args2, max_size = 0, cancellable = false })
+			if res.status == 0 then
+				arg = {
+					"notify-send",
+					"1pass finished"
+				}
+				utils.subprocess( {args = arg })
+				mp.osd_message("1 Pass succeeded")
+				print("1 pass succeeded")
+			else
+				mp.osd_message(string.format("Failed to do 1pass, check the log (%s)", res.status))
+			end
+		end
+		
+		if settings.print then
+			local o = ""
+			-- fuck this is ugly
+			for i = 1, #args do
+				local fmt = ""
+				if i == 1 then
+					fmt = "%s%s"
+				elseif i >= 2 and i <= 4 then
+					fmt = "%s"
+				elseif args[i-1] == "-i" or i == #args or args[i-1] == "-filter:v" then
+					fmt = "%s '%s'"
+				else
+					fmt = "%s %s"
+				end
+				o = string.format(fmt, o, args[i])
+			end
+			print("args", o)
+		end
+	
+		print("Start real encoding")
+        local res2 = utils.subprocess({ args = args, max_size = 0, cancellable = false, capture_stderr = true, capture_stdout = true })
+        if res2.status == 0 then
+            arg = {
                 "notify-send",
                 "Encoding finished"
             }
-            utils.subprocess( {args = args })
+            utils.subprocess( {args = arg, capture_stderr = true})
             mp.osd_message("Finished encoding succesfully")
+			print("Finished encoding successfully");
         else
-            mp.osd_message("Failed to encode, check the log")
+            mp.osd_message(string.format("Failed to encode, check the log (%s)", res2.status))
+			print("Encoding failed")
         end
     end
 end
@@ -336,26 +375,38 @@ function set_timestamp(profile)
         -- include the current frame into the extract
         local fps = mp.get_property_number("container-fps") or 30
         to = to + 1 / fps / 2            
-      
         local settings = {
             detached = false,
             container = "",
             only_active_tracks = false,
             preserve_filters = true,
             append_filter = "",
-            codec = "-an -sn -c:v libvpx -crf 10 -b:v 1000k",
-            output_format = "$f_$n.webm",
-            output_directory = "",
+            codec = "-c:v h264_nvenc -preset slow",
+            output_format = "$f_$n.mp4",
+            output_directory = "H:\\",
             ffmpeg_command = "ffmpeg",
 			append_filter_complex = "",
             print = true,
+		 target_file_size = 24,
         }
 
         if is_youtube then 
-            settings.codec = "-c:v copy -c:a copy"
+            settings = {
+                detached = false,
+                container = "",
+                only_active_tracks = false,
+                preserve_filters = true,
+                append_filter = "",
+                codec = "-c:v copy",
+                output_format = "$f_$n.mp4",
+                output_directory = "H:\\Syncthing\\media\\replaybuffer\\",
+                ffmpeg_command = "ffmpeg",
+                append_filter_complex = "",
+                print = true,
+            }   
         end
 
-        if profile then
+if profile then
             options.read_options(settings, profile)
             if settings.container ~= "" then
                 msg.warn("The 'container' setting is deprecated, use 'output_format' now")
